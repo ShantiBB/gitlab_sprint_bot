@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
-use crate::iteration::{Iteration, IterationHandler};
+use crate::utils::iteration::{Iteration, IterationHandler};
 use dashmap::DashMap;
 use reqwest::Client;
 

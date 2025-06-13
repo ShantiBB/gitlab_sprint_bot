@@ -1,16 +1,15 @@
-mod args;
-mod iteration;
-mod logic;
+mod utils;
+mod models;
 
 use std::sync::Arc;
 use std::time::Instant;
 use anyhow::anyhow;
-use args::Args;
-use iteration::get_iterations;
+use utils::args::Args;
+use utils::iteration::get_iterations;
 use clap::Parser;
 use dashmap::DashMap;
 use reqwest::Client;
-use crate::logic::BotState;
+use crate::utils::logic::BotState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
