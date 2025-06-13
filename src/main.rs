@@ -2,47 +2,53 @@ mod args;
 mod iteration;
 mod logic;
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
+use anyhow::anyhow;
 use args::Args;
 use iteration::get_iterations;
 use clap::Parser;
 use dashmap::DashMap;
-use gitlab::Gitlab;
+use reqwest::Client;
 use crate::logic::BotState;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let start_time = Instant::now();
+    
     let args = Args::parse();
-    let gl = Gitlab::new(&args.host, args.token.clone())
-        .map_err(|e| anyhow::anyhow!("Не удалось создать клиент GitLab: {}", e))?;
     let group_name = args
         .group_name.as_ref()
         .ok_or_else(|| { anyhow::anyhow!("Не указан аргумент --group-name.") })?;
     
-    let [current, next] = get_iterations(&args.host, &args.token, group_name)?;
-    for (i, iter) in [current.clone(), next.clone()].iter().enumerate() {
-        let iter_type = if i == 0 { "Текущая" } else { "Следующая" };
-        println!(
-            "[INFO] {} итерация: id={}, start_date={}, due_date={}",
-            iter_type,
-            iter.id,
-            iter.start_date,
-            iter.due_date,
-        );
-    }
+    let [current, next] = get_iterations(
+        &args.host, 
+        &args.token, 
+        group_name
+    ).await?;
+    
 
+    let client = Client::new();
     let mut state = BotState {
-        client: gl,
+        client,
+        token: args.token.to_string(),
+        host: args.host.to_string(),
         group_name: group_name.to_string(),
         current_iteration: current,
         next_iteration: next,
         assignees_filter: if args.assignees.is_empty() { None } 
             else { Some(args.assignees.clone()) },
-        developer_issues: HashMap::new(),
         developer_points: Arc::new(DashMap::new()),
+        to_move: vec![],
     };
     
-    state.process_group()?;
+    state.run().await.map_err(|e| anyhow!("[ERROR] {}", e))?;
 
+    let duration = start_time.elapsed();
+    println!(
+        "[INFO] Скрипт выполнен за {:.2?} секунд",
+        duration
+    );
+    
     Ok(())
 }
