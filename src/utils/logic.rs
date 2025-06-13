@@ -1,79 +1,12 @@
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
-use serde::Deserialize;
 use crate::utils::iteration::{Iteration, IterationHandler};
 use dashmap::DashMap;
 use reqwest::Client;
+use crate::models::issues::{GraphQLResponse, Issue};
 
 const COUNT_SP_WITHOUT_LABELS: u32 = 15;
 const COUNT_SP_ALL_ISSUES: u32 = 25;
-
-#[derive(Debug, Deserialize)]
-pub struct GraphQLResponse {
-    pub data: Data,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Data {
-    pub group: Group,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Group {
-    pub projects: Projects,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Projects {
-    pub nodes: Vec<Project>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Project {
-    #[serde(rename = "webUrl")]
-    pub web_url: String,
-
-    #[serde(rename = "issues")]
-    pub issues: Issues,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Issues {
-    pub nodes: Vec<Issue>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Issue {
-    pub iid: String,
-
-    pub weight: Option<u32>,
-
-    pub labels: Labels,
-
-    pub assignees: Assignees,
-
-    #[serde(skip)]
-    pub project_url: Option<String>,
-}
-#[derive(Debug, Deserialize)]
-pub struct Labels {
-    pub nodes: Vec<LabelNode>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LabelNode {
-    pub title: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Assignees {
-    pub nodes: Vec<AssigneeNode>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AssigneeNode {
-    pub username: String,
-}
 
 pub struct BotState {
     pub client: Client,
