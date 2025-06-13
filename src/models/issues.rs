@@ -1,35 +1,6 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct GraphQLResponse {
-    pub data: Data,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Data {
-    pub group: Group,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Group {
-    pub projects: Projects,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Projects {
-    pub nodes: Vec<Project>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Project {
-    #[serde(rename = "webUrl")]
-    pub web_url: String,
-
-    #[serde(rename = "issues")]
-    pub issues: Issues,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct Issues {
     pub nodes: Vec<Issue>,
 }

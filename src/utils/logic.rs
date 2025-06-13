@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
-use crate::utils::iteration::{Iteration, IterationHandler};
 use dashmap::DashMap;
 use reqwest::Client;
-use crate::models::issues::{GraphQLResponse, Issue};
+
+use crate::utils::iteration::{Iteration, IterationHandler};
+use crate::models::graphql::GraphQLResponse;
+use crate::models::issues::Issue;
 
 const COUNT_SP_WITHOUT_LABELS: u32 = 15;
 const COUNT_SP_ALL_ISSUES: u32 = 25;

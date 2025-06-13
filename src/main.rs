@@ -4,11 +4,12 @@ mod models;
 use std::sync::Arc;
 use std::time::Instant;
 use anyhow::anyhow;
-use utils::args::Args;
-use utils::iteration::get_iterations;
 use clap::Parser;
 use dashmap::DashMap;
 use reqwest::Client;
+
+use utils::args::Args;
+use utils::iteration::get_iterations;
 use crate::utils::logic::BotState;
 
 #[tokio::main]

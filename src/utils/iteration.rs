@@ -2,6 +2,7 @@ use anyhow::Result;
 use reqwest::Client;
 use std::sync::Arc;
 use dashmap::DashMap;
+
 pub(crate) use crate::models::iterations::Iteration;
 
 pub async fn get_iterations(host: &str, token: &str, group_name: &str) -> Result<[Iteration; 2]> {
