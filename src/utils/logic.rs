@@ -3,12 +3,14 @@ use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use reqwest::Client;
 
-use crate::utils::iteration::{Iteration, IterationHandler};
+use crate::utils::iteration::Iteration;
 use crate::models::graphql::GraphQLResponse;
-use crate::models::issues::Issue;
-
-const COUNT_SP_WITHOUT_LABELS: u32 = 15;
-const COUNT_SP_ALL_ISSUES: u32 = 25;
+use crate::models::issues::{AssigneeNode, Issue};
+use crate::utils::constants::{
+    COUNT_SP_WITHOUT_LABELS, 
+    COUNT_SP_ALL_ISSUES,
+    GET_ISSUES_QUERY
+};
 
 pub struct BotState {
     pub client: Client,
@@ -24,37 +26,16 @@ pub struct BotState {
 
 impl BotState {
     pub async fn get_group_issues(&mut self) -> Result<Vec<Issue>> {
-        let query = r#"
-        query GetIterationIssues($group: ID!, $iterId: ID!) {
-            group(fullPath: $group) {
-                projects(first: 100, includeSubgroups: true) {
-                    nodes {
-                        webUrl
-                        issues(state: opened, iterationId: [$iterId], first: 100) {
-                            nodes {
-                                iid
-                                webUrl
-                                weight
-                                labels { nodes { title } }
-                                assignees { nodes { username } }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        "#;
-
         let variables = serde_json::json!({
             "group": self.group_name,
             "iterId": self.current_iteration.id,
         });
 
         let body = serde_json::json!({
-            "query": query,
+            "query": GET_ISSUES_QUERY,
             "variables": variables,
         });
-        
+
         let graphql_host = format!("{}/api/graphql", self.host);
         let response = self.client
             .post(graphql_host)
@@ -72,6 +53,23 @@ impl BotState {
             let proj_url = project.web_url.clone();
 
             for mut issue in project.issues.nodes {
+                let titles = issue
+                    .labels
+                    .nodes
+                    .iter()
+                    .map(|l| &l.title).collect::<Vec<_>>();
+                issue.has_low_priority_label = titles
+                    .iter()
+                    .any(|&t| t == "priority::Minor" || t == "priority::Trivial");
+                issue.has_review_or_test_label = titles
+                    .iter()
+                    .any(|&t| t == "status::to-review" || t == "status::to-test");
+                issue.has_release_or_customer_label = titles
+                    .iter()
+                    .any(
+                        |&t| t.starts_with("release::")
+                            || t.starts_with("customer::")
+                    );
                 issue.project_url = Some(proj_url.clone());
                 issues_flat.push(issue);
             }
@@ -97,65 +95,112 @@ impl BotState {
         Ok(project_path)
     }
 
-    pub async fn process(&mut self, issue: &Issue) -> Result<()> {
-        let labels = &issue.labels;
-        let is_low_priority = labels.nodes
-            .iter()
-            .any(|l| l.title == "priority::Minor" || l.title == "priority::Trivial");
-        let has_release_or_customer_label = labels.nodes
-            .iter()
-            .any(
-                |l| l.title.starts_with("release::")
-                || l.title.starts_with("customer::")
-            );
-        let has_to_review_or_to_test = labels.nodes
-            .iter()
-            .any(|l| l.title == "status::to-review" || l.title == "status::to-test");
+    fn check_assignees_flag(&self, username: &String) -> bool {
+        if let Some(ref filter) = self.assignees_filter {
+            if !filter.contains(username) {
+                return true
+            }
+        }
+        false
+    }
+
+    pub async fn move_reasons(&self, issue: &Issue, username: String) -> (bool, bool) {
+        if issue.has_release_or_customer_label {
+            return (false, false);
+        }
+
+        if let Some(entry) = self.developer_points.get(&username) {
+            let (without, all) = *entry.value();
+            let by_without = !issue
+                .has_review_or_test_label && without >= COUNT_SP_WITHOUT_LABELS;
+            let by_all     = all >= COUNT_SP_ALL_ISSUES;
+            (by_without, by_all)
+        } else {
+            (false, false)
+        }
+    }
+
+    pub async fn add_to_move_issues(&mut self, issue: &Issue) -> Result<()> {
+        let assignees = &issue.assignees.nodes;
         let weight = issue.weight.unwrap_or(0);
-
-        for assignee in &issue.assignees.nodes {
-            let username = &assignee.username;
-
-            if let Some(ref filter) = self.assignees_filter {
-                if !filter.contains(username) {
-                    continue;
-                }
+        let mut should_move = false;
+        
+        for assignee in assignees {
+            if self.check_assignees_flag(&assignee.username) {
+                continue
             }
-
-            self.developer_points.entry(username.clone()).or_insert((0, 0));
-
-            if !has_to_review_or_to_test {
-                if let Some(mut entry) = self.developer_points.get_mut(username) {
-                    entry.value_mut().0 = entry.value().0.saturating_add(weight);
-                }
-            }
-            if let Some(mut entry) = self.developer_points.get_mut(username) {
-                entry.value_mut().1 = entry.value().1.saturating_add(weight);
-            }
-
-            let handler = IterationHandler {
-                username: &assignee.username,
-                developer_points: Arc::clone(&self.developer_points),
-                has_release_or_customer_label,
-                has_to_review_or_to_test,
-            };
-
-            let (by_without, by_all) = handler
-                .move_reasons(COUNT_SP_WITHOUT_LABELS, COUNT_SP_ALL_ISSUES)
-                .await;
-
-            if is_low_priority && (by_without || by_all) {
-                let project_namespace = self.get_project_namespace(
-                    &issue.project_url.clone().unwrap()
-                ).await?;
-                self.to_move.push((project_namespace, issue.iid.clone()));
+            let (by_without, by_all) = self.move_reasons(
+                issue, assignee.username.clone()
+            ).await;
+            if issue.has_low_priority_label && (by_without || by_all) {
+                should_move = true;
                 break;
             }
+        }
+
+        if should_move {
+            let project_namespace = self.get_project_namespace(
+                issue.project_url.as_ref().unwrap(),
+            ).await?;
+            self.to_move.push((project_namespace, issue.iid.clone()));
+
+            self.sub_weight_for_assignees(
+                assignees,
+                !issue.has_review_or_test_label,
+                weight,
+            );
         }
 
         Ok(())
     }
 
+    fn add_weight_for_assignees(
+        &self,
+        assignees: &[AssigneeNode],
+        without_review_to_test_labels: bool,
+        weight: u32,
+    ) {
+        for assignee in assignees {
+            let username = &assignee.username;
+            if self.check_assignees_flag(username) {
+                continue
+            }
+            
+            self.developer_points.entry(username.clone()).or_insert((0, 0));
+            if let Some(mut entry) = self.developer_points.get_mut(username) {
+                if without_review_to_test_labels {
+                    entry.value_mut().0 = entry.value().0.saturating_add(weight);
+                }
+                entry.value_mut().1 = entry.value().1.saturating_add(weight);
+            }
+        }
+    }
+    
+    pub fn sub_weight_for_assignees(
+        &self,
+        assignees: &[AssigneeNode],
+        by_without_labels: bool,
+        weight: u32,
+    ) {
+        for assignee in assignees {
+            let key = &assignee.username;
+            if self.check_assignees_flag(key) {
+                continue
+            }
+            
+            if by_without_labels {
+                if let Some(mut entry) = self.developer_points.get_mut(key) {
+                    let new0 = entry.value().0.saturating_sub(weight);
+                    entry.value_mut().0 = new0;
+                }
+            }
+            if let Some(mut entry) = self.developer_points.get_mut(key) {
+                let new1 = entry.value().1.saturating_sub(weight);
+                entry.value_mut().1 = new1;
+            }
+        }
+    }
+    
     pub async fn batch_move_issues(
         &self,
         to_move: Vec<(String, String)>,
@@ -203,7 +248,15 @@ impl BotState {
             .json()
             .await?;
 
-        println!("[INFO] Batch move response: {}", resp);
+        let ids: Vec<String> = resp["data"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|entry| {
+                entry.get("issue")?.get("iid")?.as_str().map(|s| s.to_string())
+            })
+            .collect();
+        println!("[INFO] Batch move response: ids [{}]", ids.join(", "));
         Ok(())
     }
 
@@ -212,9 +265,15 @@ impl BotState {
             .get_group_issues()
             .await
             .map_err(|e| anyhow!("[ERROR] Ошибка при получении задач группы: {}", e))?;
-
+        
         for issue in &issues_flat {
-            self.process(issue).await?;
+            let weight = issue.weight.unwrap_or(0);
+            let assignees = &issue.assignees.nodes;
+            let allows_without_review = !issue.has_review_or_test_label;
+            self.add_weight_for_assignees(assignees, allows_without_review, weight);
+        }
+        for issue in &issues_flat {
+            self.add_to_move_issues(issue).await?;
         }
 
         println!(
@@ -225,6 +284,13 @@ impl BotState {
         self.batch_move_issues(self.to_move.clone())
             .await
             .map_err(|e| anyhow!("[ERROR] Ошибка при обновлении итерации: {}", e))?;
+        
+        for entry in self.developer_points.iter() {
+            let name = entry.key();
+            let (done, total) = *entry.value();
+            println!("[INFO] {} - sp без лейблов: {} sp всех задач: {}", name, done, total);
+        }
         Ok(())
     }
+    
 }
