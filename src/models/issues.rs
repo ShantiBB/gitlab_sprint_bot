@@ -17,6 +17,15 @@ pub struct Issue {
 
     #[serde(skip)]
     pub project_url: Option<String>,
+
+    #[serde(default)]
+    pub has_low_priority_label: bool,
+
+    #[serde(default)]
+    pub has_review_or_test_label: bool,
+
+    #[serde(default)]
+    pub has_release_or_customer_label: bool,
 }
 #[derive(Debug, Deserialize)]
 pub struct Labels {
